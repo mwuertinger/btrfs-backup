@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -16,11 +18,14 @@ func main() {
 		port: 10022,
 	}
 
-	subVolumesLocal, err := getSubVolumes(localhost, "/mnt")
+	snapshotRegex := regexp.MustCompile(`\d\d\d\d-\d\d-\d\d_\d\d-\d\d`)
+	localSnapshotPrefix := "snapshot/"
+
+	subVolumesLocal, err := getSubVolumes(localhost, "/mnt", localSnapshotPrefix, snapshotRegex)
 	if err != nil {
 		log.Fatal(err)
 	}
-	subVolumesRemote, err := getSubVolumes(remote, "/mnt")
+	subVolumesRemote, err := getSubVolumes(remote, "/mnt", "", snapshotRegex)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,11 +43,42 @@ func main() {
 		fmt.Println(subvolume)
 	}
 
-	// mostRecentRemote :=
+	mostRecentRemote := subVolumesRemote[len(subVolumesRemote)-1]
+	previousSnapshot := ""
+	for _, snapshot := range subVolumesLocal {
+		if previousSnapshot != "" {
+			err := sendSnapshot(snapshot, previousSnapshot, "/mnt", localSnapshotPrefix, remote)
+			if err != nil {
+				log.Fatal(err)
+			}
+			previousSnapshot = snapshot
+		}
+
+		if snapshot == mostRecentRemote {
+			previousSnapshot = mostRecentRemote
+		}
+	}
 }
 
-func getSubVolumes(d destination, mountPoint string) ([]string, error) {
-	return execPipe(d, parseSubVolumes, "btrfs", "subvolume", "list", mountPoint)
+func sendSnapshot(snapshot, previousSnapshot, mountPoint, prefix string, d destination) error {
+	fmt.Printf("btrfs send -p %s %s\n", path.Join(mountPoint, prefix, previousSnapshot), path.Join(mountPoint, prefix, snapshot))
+	return nil
+}
+
+func getSubVolumes(d destination, mountPoint string, prefix string, r *regexp.Regexp) ([]string, error) {
+	volumes, err := execPipe(d, parseSubVolumes, "btrfs", "subvolume", "list", mountPoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var res []string
+	for _, volume := range volumes {
+		if strings.HasPrefix(volume, prefix) && r.MatchString(volume) {
+			res = append(res, strings.TrimPrefix(volume, prefix))
+		}
+	}
+
+	return res, nil
 }
 
 // parser parses the output of a process and returns the result as a slice of strings.
