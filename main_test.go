@@ -2,7 +2,6 @@ package main
 
 import (
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -58,7 +57,7 @@ ID 7578 gen 24969 top level 5 path snapshot/2019-01-31_03-00
 
 	expectedSubvolumes := []string{"snapshot/2019-01-10_03-00", "snapshot/2019-01-11_03-00", "snapshot/2019-01-12_03-00", "snapshot/2019-01-13_03-00", "snapshot/2019-01-14_03-00", "snapshot/2019-01-15_03-00", "snapshot/2019-01-16_03-00", "snapshot/2019-01-17_03-00", "snapshot/2019-01-18_03-00", "snapshot/2019-01-19_03-00", "snapshot/2019-01-20_03-00", "snapshot/2019-01-21_03-00", "snapshot/2019-01-22_03-00", "snapshot/2019-01-23_03-00", "snapshot/2019-01-24_03-00", "snapshot/2019-01-25_03-00", "snapshot/2019-01-26_03-00", "snapshot/2019-01-27_03-00", "snapshot/2019-01-28_03-00", "snapshot/2019-01-29_03-00", "snapshot/2019-01-30_03-00", "snapshot/2019-01-31_03-00"}
 
-	subvolumes, err := parseSubVolumes(strings.NewReader(btrfsOutput))
+	subvolumes, err := parseSubVolumes(btrfsOutput)
 	if err != nil {
 		t.Fatal(err)
 	}

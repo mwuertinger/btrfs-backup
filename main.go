@@ -1,9 +1,8 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
 	"path"
@@ -62,7 +61,14 @@ func sendSnapshot(snapshot, previousSnapshot, mountPoint, prefix string, d desti
 }
 
 func getSnapshots(d destination, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
-	subVolumes, err := execPipe(d, parseSubVolumes, "btrfs", "subvolume", "list", mountPoint)
+	out, err := d.exec("btrfs", "subvolume", "list", mountPoint)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("btrfs returned: %s", out)
+
+	subVolumes, err := parseSubVolumes(out)
 	if err != nil {
 		return nil, err
 	}
@@ -88,9 +94,6 @@ func filterSnapshots(volumes []string, snapshotDir string, r *regexp.Regexp) []s
 	return snapshots
 }
 
-// parser parses the output of a process and returns the result as a slice of strings.
-type parser func(r io.Reader) ([]string, error)
-
 // destination determines where a command is to be executed.
 type destination struct {
 	host string
@@ -100,44 +103,28 @@ type destination struct {
 // localhost is a special destination for running commands locally
 var localhost destination
 
-// execPipe runs the specified cmd at destination d and parses the result with p before returning it.
-func execPipe(d destination, p parser, cmd ... string) ([]string, error) {
+// exec runs the specified cmd at destination d and returns stdout.
+func (d destination) exec(cmd ... string) (string, error) {
 	var c *exec.Cmd
 	if d == localhost {
 		c = exec.Command(cmd[0], cmd[1:]...)
 	} else {
 		c = exec.Command("ssh", fmt.Sprintf("-p%d", d.port), d.host, strings.Join(cmd, " "))
 	}
-
-	pipe, err := c.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("execPipe: %v", err)
+	var buf bytes.Buffer
+	c.Stdout = &buf
+	if err := c.Run(); err != nil {
+		return "", err
 	}
-	defer pipe.Close()
-	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("execPipe: %v", err)
-	}
-
-	res, err := p(pipe)
-	if err != nil {
-		return nil, fmt.Errorf("execPipe: %v", err)
-	}
-
-	if err := c.Wait(); err != nil {
-		return nil, fmt.Errorf("execPipe: %v", err)
-	}
-
-	return res, nil
+	return buf.String(), nil
 }
 
 // parseSubVolumes extracts the sub-volume names from the "btrfs subvolume list" command.
-func parseSubVolumes(r io.Reader) ([]string, error) {
-	br := bufio.NewReader(r)
+func parseSubVolumes(out string) ([]string, error) {
 	var names []string
-	for {
-		line, err := br.ReadBytes('\n')
-		if err == io.EOF {
-			return names, nil
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
 		}
 		tokens := strings.Split(string(line), " ")
 		if len(tokens) != 9 {
@@ -145,7 +132,6 @@ func parseSubVolumes(r io.Reader) ([]string, error) {
 		}
 		names = append(names, strings.TrimRight(tokens[8], "\n"))
 	}
-
 
 	return names, nil
 }
