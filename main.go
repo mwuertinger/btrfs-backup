@@ -18,36 +18,32 @@ func main() {
 		port: 10022,
 	}
 
-	snapshotRegex := regexp.MustCompile(`\d\d\d\d-\d\d-\d\d_\d\d-\d\d`)
-	localSnapshotPrefix := "snapshot/"
+	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
+	snapshotSubDir := "snapshot"
 
-	subVolumesLocal, err := getSubVolumes(localhost, "/mnt", localSnapshotPrefix, snapshotRegex)
+	snapshotsLocal, err := getSnapshots(localhost, "/mnt", snapshotSubDir, snapshotRegex)
 	if err != nil {
 		log.Fatal(err)
 	}
-	subVolumesRemote, err := getSubVolumes(remote, "/mnt", "", snapshotRegex)
+	snapshotsRemote, err := getSnapshots(remote, "/mnt", "", snapshotRegex)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// Should already be sorted but just to be sure
-	sort.Strings(subVolumesLocal)
-	sort.Strings(subVolumesRemote)
 
 	fmt.Println("local:")
-	for _, subvolume := range subVolumesLocal {
-		fmt.Println(subvolume)
+	for _, snapshot := range snapshotsLocal {
+		fmt.Println(snapshot)
 	}
 	fmt.Println("\nremote:")
-	for _, subvolume := range subVolumesRemote {
-		fmt.Println(subvolume)
+	for _, snapshots := range snapshotsRemote {
+		fmt.Println(snapshots)
 	}
 
-	mostRecentRemote := subVolumesRemote[len(subVolumesRemote)-1]
+	mostRecentRemote := snapshotsRemote[len(snapshotsRemote)-1]
 	previousSnapshot := ""
-	for _, snapshot := range subVolumesLocal {
+	for _, snapshot := range snapshotsLocal {
 		if previousSnapshot != "" {
-			err := sendSnapshot(snapshot, previousSnapshot, "/mnt", localSnapshotPrefix, remote)
+			err := sendSnapshot(snapshot, previousSnapshot, "/mnt", snapshotSubDir, remote)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -65,20 +61,31 @@ func sendSnapshot(snapshot, previousSnapshot, mountPoint, prefix string, d desti
 	return nil
 }
 
-func getSubVolumes(d destination, mountPoint string, prefix string, r *regexp.Regexp) ([]string, error) {
-	volumes, err := execPipe(d, parseSubVolumes, "btrfs", "subvolume", "list", mountPoint)
+func getSnapshots(d destination, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
+	subVolumes, err := execPipe(d, parseSubVolumes, "btrfs", "subvolume", "list", mountPoint)
 	if err != nil {
 		return nil, err
 	}
+	snapshots := filterSnapshots(subVolumes, snapshotDir, r)
+	sort.Strings(snapshots)
+	return snapshots, nil
+}
 
-	var res []string
+func filterSnapshots(volumes []string, snapshotDir string, r *regexp.Regexp) []string {
+	var snapshots []string
 	for _, volume := range volumes {
-		if strings.HasPrefix(volume, prefix) && r.MatchString(volume) {
-			res = append(res, strings.TrimPrefix(volume, prefix))
+		dir, name := path.Split(volume)
+		if strings.TrimSuffix(dir, "/") != snapshotDir {
+			log.Printf("dir != snapshotDir: %s != %s", dir, snapshotDir)
+			continue
 		}
+		if !r.MatchString(name) {
+			log.Printf("%s does not match %v", name, *r)
+			continue
+		}
+		snapshots = append(snapshots, name)
 	}
-
-	return res, nil
+	return snapshots
 }
 
 // parser parses the output of a process and returns the result as a slice of strings.

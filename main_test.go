@@ -1,9 +1,35 @@
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestFilterSnapshots(t *testing.T) {
+	data := []struct{
+		volumes []string
+		result []string
+		snapshotDir string
+		r *regexp.Regexp
+	}{
+		{
+			[]string{"snapshot/2019-01-10_03-00", "snapshot/2019-01-11_03-00", "snapshot/2019-01-12_03-00"},
+			[]string{"2019-01-10_03-00", "2019-01-11_03-00", "2019-01-12_03-00"},
+			"snapshot",
+			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
+		},
+	}
+
+	for _, d := range data {
+		res := filterSnapshots(d.volumes, d.snapshotDir, d.r)
+		for i := range d.result {
+			if res[i] != d.result[i] {
+				t.Errorf("differs at %d: %s != %s", i, res[i], d.result[i])
+			}
+		}
+	}
+}
 
 func TestParseSubvolumes(t *testing.T) {
 	btrfsOutput := `ID 6986 gen 23961 top level 5 path snapshot/2019-01-10_03-00
