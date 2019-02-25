@@ -12,57 +12,66 @@ import (
 )
 
 func main() {
-	remote := destination{
+	destination := destination{
 		host: "target-host",
 		port: 10022,
 	}
-
+	mount := "/mnt" // btrfs mount point
 	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
 	snapshotDir := "snapshot" // relative to mount point
 
-	snapshotsLocal, err := getSnapshots(localhost, "/mnt", snapshotDir, snapshotRegex)
+	localSnapshots, err := getSnapshots(localhost, mount, snapshotDir, snapshotRegex)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to get local snapshots: %v", err)
 	}
-	snapshotsRemote, err := getSnapshots(remote, "/mnt", "", snapshotRegex)
+	remoteSnapshots, err := getSnapshots(destination, mount, "", snapshotRegex)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to get remove snapshots: %v", err)
 	}
 
 	fmt.Println("local:")
-	for _, snapshot := range snapshotsLocal {
+	for _, snapshot := range localSnapshots {
 		fmt.Println(snapshot)
 	}
-	fmt.Println("\nremote:")
-	for _, snapshots := range snapshotsRemote {
+	fmt.Println("\ndestination:")
+	for _, snapshots := range remoteSnapshots {
 		fmt.Println(snapshots)
 	}
 
-	mostRecentRemote := snapshotsRemote[len(snapshotsRemote)-1]
-	previousSnapshot := ""
-	for _, snapshot := range snapshotsLocal {
-		if previousSnapshot != "" {
-			err := sendSnapshot(localhost, snapshot, previousSnapshot, "/mnt", snapshotDir, remote)
-			if err != nil {
-				log.Fatal(err)
-			}
-			previousSnapshot = snapshot
-		}
-
-		if snapshot == mostRecentRemote {
-			previousSnapshot = mostRecentRemote
-		}
+	if err := transmitSnapshots(localhost, destination, mount, snapshotDir, localSnapshots, remoteSnapshots); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func sendSnapshot(e executor, snapshot, previousSnapshot, mountPoint, snapshotDir string, d destination) error {
-	fmt.Printf("btrfs send -p %s %s\n", path.Join(mountPoint, snapshotDir, previousSnapshot), path.Join(mountPoint, snapshotDir, snapshot))
+func transmitSnapshots(e executor, d destination, mount, dir string, localSnapshots, remoteSnapshots []string) error {
+	mostRecentRemote := remoteSnapshots[len(remoteSnapshots)-1]
+	previousSnapshot := ""
+
+	for _, snapshot := range localSnapshots {
+		if previousSnapshot != "" {
+			err := sendSnapshot(e, d, snapshot, previousSnapshot, mount, dir)
+			if err != nil {
+				return fmt.Errorf("transmitSnapshots: %v", err)
+			}
+			previousSnapshot = snapshot
+		} else if snapshot == mostRecentRemote {
+			previousSnapshot = mostRecentRemote
+		}
+	}
+
+	return nil
+}
+
+func sendSnapshot(e executor, d destination, snapshot, previousSnapshot, mountPoint, snapshotDir string) error {
+	p := path.Join(mountPoint, snapshotDir, previousSnapshot)
+	s := path.Join(mountPoint, snapshotDir, snapshot)
+	e.execPipe([]string{"btrfs", "send", "-p", p, s}, sshCmd(d, []string{"btrfs", "receive", mountPoint}))
 	return nil
 }
 
 // getSnapshots returns a sorted list of snapshots.
 func getSnapshots(e executor, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
-	out, err := e.exec("btrfs", "subvolume", "list", mountPoint)
+	out, err := e.exec([]string{"btrfs", "subvolume", "list", mountPoint})
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +121,8 @@ func filterSnapshots(subVolumes []string, snapshotDir string, r *regexp.Regexp) 
 
 // executor allows to execute commands locally or remotely. It also allows to mock execution for testing.
 type executor interface {
-	exec(cmd ... string) (string, error)
+	exec(cmd []string) (string, error)
+	execPipe(cmd1, cmd2 []string) (string, error)
 }
 
 // destination determines where a command is to be executed.
@@ -125,17 +135,23 @@ type destination struct {
 var localhost destination
 
 // exec runs the specified cmd at destination d and returns stdout.
-func (d destination) exec(cmd ... string) (string, error) {
-	var c *exec.Cmd
-	if d == localhost {
-		c = exec.Command(cmd[0], cmd[1:]...)
-	} else {
-		c = exec.Command("ssh", fmt.Sprintf("-p%d", d.port), d.host, strings.Join(cmd, " "))
+func (d destination) exec(cmd []string) (string, error) {
+	if d != localhost {
+		cmd = sshCmd(d, cmd)
 	}
+	c := exec.Command(cmd[0], cmd[1:]...)
 	var buf bytes.Buffer
 	c.Stdout = &buf
 	if err := c.Run(); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+func (d destination) execPipe(cmd1, cmd2 []string) (string, error) {
+	return "", nil
+}
+
+func sshCmd(d destination, remoteCmd []string) []string {
+	return []string{"ssh", fmt.Sprintf("-p%d", d.port), d.host, strings.Join(remoteCmd, " ")}
 }
