@@ -283,6 +283,16 @@ func TestExec(t *testing.T) {
 	}
 }
 
+func TestExecPipe(t *testing.T) {
+	out, err := localhost.execPipe([]string{"echo", "foo"}, []string{"cat"})
+	if err != nil {
+		t.Error(err)
+	}
+	if out != "foo\n" {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
 type trackingExecutor struct {
 	invocations []invocation
 }

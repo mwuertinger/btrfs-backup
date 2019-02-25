@@ -65,7 +65,16 @@ func transmitSnapshots(e executor, d destination, mount, dir string, localSnapsh
 func sendSnapshot(e executor, d destination, snapshot, previousSnapshot, mountPoint, snapshotDir string) error {
 	p := path.Join(mountPoint, snapshotDir, previousSnapshot)
 	s := path.Join(mountPoint, snapshotDir, snapshot)
-	e.execPipe([]string{"btrfs", "send", "-p", p, s}, sshCmd(d, []string{"btrfs", "receive", mountPoint}))
+
+	cmd1 := []string{"btrfs", "send", "-p", p, s}
+	cmd2 := sshCmd(d, []string{"btrfs", "receive", mountPoint})
+
+	log.Printf("%s | %s", strings.Join(cmd1, " "), strings.Join(cmd2, " "))
+
+	//_, err := e.execPipe(cmd1, cmd2)
+	//if err != nil {
+	//	return fmt.Errorf("sendSnapshot: %v", err)
+	//}
 	return nil
 }
 
@@ -149,7 +158,32 @@ func (d destination) exec(cmd []string) (string, error) {
 }
 
 func (d destination) execPipe(cmd1, cmd2 []string) (string, error) {
-	return "", nil
+	c1 := exec.Command(cmd1[0], cmd1[1:]...)
+	c2 := exec.Command(cmd2[0], cmd2[1:]...)
+
+	pipe, err := c1.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("execPipe: StdoutPipe: %v", err)
+	}
+	c2.Stdin = pipe
+
+	var buf bytes.Buffer
+	c2.Stdout = &buf
+
+	if err := c1.Start(); err != nil {
+		return "", fmt.Errorf("execPipe: c1.Start: %v", err)
+	}
+	if err := c2.Start(); err != nil {
+		return "", fmt.Errorf("execPipe: c2.Start: %v", err)
+	}
+	if err := c1.Wait(); err != nil {
+		return "", fmt.Errorf("execPipe: c1.Wait: %v", err)
+	}
+	if err := c2.Wait(); err != nil {
+		return "", fmt.Errorf("execPipe: c2.Wait: %v", err)
+	}
+
+	return buf.String(), nil
 }
 
 func sshCmd(d destination, remoteCmd []string) []string {
