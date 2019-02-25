@@ -13,18 +13,46 @@ func TestFilterSnapshots(t *testing.T) {
 		r *regexp.Regexp
 	}{
 		{
-			[]string{"snapshot/2019-01-10_03-00", "snapshot/2019-01-11_03-00", "snapshot/2019-01-12_03-00"},
+			[]string{"snapshot/2019-01-10_03-00", "snapshot/2019-01-11_03-00", "snapshot/2019-01-12_03-00", "snapshot/foobar", "foobar"},
 			[]string{"2019-01-10_03-00", "2019-01-11_03-00", "2019-01-12_03-00"},
 			"snapshot",
 			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
 		},
+		{
+			[]string{},
+			[]string{},
+			"snapshot",
+			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
+		},
+		{
+			[]string{"snapshot/2019-01-10_03-00", "foobar"},
+			[]string{"2019-01-10_03-00"},
+			"snapshot/",
+			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
+		},
+		{
+			[]string{"2019-01-10_03-00", "foobar"},
+			[]string{"2019-01-10_03-00"},
+			"",
+			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
+		},
+		{
+			[]string{"2019-01-10_03-00", "foo", "bar"},
+			[]string{"2019-01-10_03-00", "foo", "bar"},
+			"",
+			regexp.MustCompile(`.*`),
+		},
 	}
 
-	for _, d := range data {
+	for di, d := range data {
 		res := filterSnapshots(d.volumes, d.snapshotDir, d.r)
+		if len(res) != len(d.result) {
+			t.Errorf("%d: unexpected number of results: %d != %d", di, len(res), len(d.result))
+			continue
+		}
 		for i := range d.result {
 			if res[i] != d.result[i] {
-				t.Errorf("differs at %d: %s != %s", i, res[i], d.result[i])
+				t.Errorf("%d: unexpected result: %#v != %#v", di, res, d.result)
 			}
 		}
 	}

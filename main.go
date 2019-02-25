@@ -18,9 +18,9 @@ func main() {
 	}
 
 	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
-	snapshotSubDir := "snapshot"
+	snapshotDir := "snapshot" // relative to mount point
 
-	snapshotsLocal, err := getSnapshots(localhost, "/mnt", snapshotSubDir, snapshotRegex)
+	snapshotsLocal, err := getSnapshots(localhost, "/mnt", snapshotDir, snapshotRegex)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func main() {
 	previousSnapshot := ""
 	for _, snapshot := range snapshotsLocal {
 		if previousSnapshot != "" {
-			err := sendSnapshot(snapshot, previousSnapshot, "/mnt", snapshotSubDir, remote)
+			err := sendSnapshot(localhost, snapshot, previousSnapshot, "/mnt", snapshotDir, remote)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -55,18 +55,17 @@ func main() {
 	}
 }
 
-func sendSnapshot(snapshot, previousSnapshot, mountPoint, prefix string, d destination) error {
-	fmt.Printf("btrfs send -p %s %s\n", path.Join(mountPoint, prefix, previousSnapshot), path.Join(mountPoint, prefix, snapshot))
+func sendSnapshot(e executor, snapshot, previousSnapshot, mountPoint, snapshotDir string, d destination) error {
+	fmt.Printf("btrfs send -p %s %s\n", path.Join(mountPoint, snapshotDir, previousSnapshot), path.Join(mountPoint, snapshotDir, snapshot))
 	return nil
 }
 
-func getSnapshots(d destination, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
-	out, err := d.exec("btrfs", "subvolume", "list", mountPoint)
+// getSnapshots returns a sorted list of snapshots.
+func getSnapshots(e executor, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
+	out, err := e.exec("btrfs", "subvolume", "list", mountPoint)
 	if err != nil {
 		return nil, err
 	}
-
-	log.Printf("btrfs returned: %s", out)
 
 	subVolumes, err := parseSubVolumes(out)
 	if err != nil {
@@ -77,21 +76,43 @@ func getSnapshots(d destination, mountPoint string, snapshotDir string, r *regex
 	return snapshots, nil
 }
 
-func filterSnapshots(volumes []string, snapshotDir string, r *regexp.Regexp) []string {
+// parseSubVolumes extracts the sub-volume names from the "btrfs subvolume list" command.
+func parseSubVolumes(out string) ([]string, error) {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		tokens := strings.Split(string(line), " ")
+		if len(tokens) != 9 {
+			return nil, fmt.Errorf("parseSubVolumes: unexpected btrfs output: %s", line)
+		}
+		names = append(names, strings.TrimRight(tokens[8], "\n"))
+	}
+
+	return names, nil
+}
+
+// filterSnapshots returns all snapshots from the list of sub-volumes. It filters by snapshotDir and the regex r.
+func filterSnapshots(subVolumes []string, snapshotDir string, r *regexp.Regexp) []string {
+	snapshotDir = path.Clean(snapshotDir)
 	var snapshots []string
-	for _, volume := range volumes {
+	for _, volume := range subVolumes {
 		dir, name := path.Split(volume)
-		if strings.TrimSuffix(dir, "/") != snapshotDir {
-			log.Printf("dir != snapshotDir: %s != %s", dir, snapshotDir)
+		if path.Clean(dir) != snapshotDir {
 			continue
 		}
 		if !r.MatchString(name) {
-			log.Printf("%s does not match %v", name, *r)
 			continue
 		}
 		snapshots = append(snapshots, name)
 	}
 	return snapshots
+}
+
+// executor allows to execute commands locally or remotely. It also allows to mock execution for testing.
+type executor interface {
+	exec(cmd ... string) (string, error)
 }
 
 // destination determines where a command is to be executed.
@@ -117,21 +138,4 @@ func (d destination) exec(cmd ... string) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-// parseSubVolumes extracts the sub-volume names from the "btrfs subvolume list" command.
-func parseSubVolumes(out string) ([]string, error) {
-	var names []string
-	for _, line := range strings.Split(out, "\n") {
-		if line == "" {
-			continue
-		}
-		tokens := strings.Split(string(line), " ")
-		if len(tokens) != 9 {
-			return nil, fmt.Errorf("parseSubVolumes: unexpected btrfs output: %s", line)
-		}
-		names = append(names, strings.TrimRight(tokens[8], "\n"))
-	}
-
-	return names, nil
 }
