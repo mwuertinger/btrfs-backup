@@ -10,8 +10,8 @@ import (
 // mockExecutor returns (res, err) if exec is invoked with cmd and returns an error otherwise.
 type mockExecutor struct {
 	cmds [][]string
-	res string
-	err error
+	res  string
+	err  error
 }
 
 func (e mockExecutor) exec(cmds [][]string) (string, error) {
@@ -22,68 +22,71 @@ func (e mockExecutor) exec(cmds [][]string) (string, error) {
 }
 
 func TestGetSnapshots(t *testing.T) {
-	data := []struct{
-		e executor
-		mountDir string
-		snapshotDir string
-		r *regexp.Regexp
-		resSnapshots []string
-		resError bool
+	data := []struct {
+		node      node
+		snapshots []string
+		err       bool
 	}{
 		{
-			mockExecutor{
-				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
-				"ID 6988 gen 23968 top level 5 path snapshot/2019-01-11_03-00\nID 6989 gen 23981 top level 5 path snapshot/2019-01-12_03-00\nID 6990 gen 24002 top level 5 path snapshot/2019-01-13_03-00\n",
-				nil,
+			node: node{
+				executor: mockExecutor{
+					[][]string{{"btrfs", "subvolume", "list", "/foo"}},
+					"ID 6988 gen 23968 top level 5 path snapshot/2019-01-11_03-00\nID 6989 gen 23981 top level 5 path snapshot/2019-01-12_03-00\nID 6990 gen 24002 top level 5 path snapshot/2019-01-13_03-00\n",
+					nil,
+				},
+				mountPoint:    "/foo",
+				snapshotPath:  "snapshot",
+				snapshotRegex: regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
 			},
-			"/foo",
-			"snapshot",
-			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
-			[]string{"2019-01-11_03-00", "2019-01-12_03-00", "2019-01-13_03-00"},
-			false,
+			snapshots: []string{"2019-01-11_03-00", "2019-01-12_03-00", "2019-01-13_03-00"},
+			err:       false,
 		},
 		{
-			mockExecutor{
-				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
-				"",
-				fmt.Errorf("mock error"),
+			node: node{
+				executor: mockExecutor{
+					[][]string{{"btrfs", "subvolume", "list", "/foo"}},
+					"",
+					fmt.Errorf("mock error"),
+				},
+				mountPoint:    "/foo",
+				snapshotPath:  "snapshot",
+				snapshotRegex: regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
 			},
-			"/foo",
-			"snapshot",
-			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
-			[]string{},
-			true,
+			snapshots: []string{},
+			err:       true,
 		},
 		{
-			mockExecutor{
-				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
-				"foo",
-				nil,
+			node: node{
+				executor: mockExecutor{
+					[][]string{{"btrfs", "subvolume", "list", "/foo"}},
+					"foo",
+					nil,
+				},
+				mountPoint:    "/foo",
+				snapshotPath:  "snapshot",
+				snapshotRegex: regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
 			},
-			"/foo",
-			"snapshot",
-			regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`),
-			[]string{},
-			true,
+			snapshots: []string{},
+			err:       true,
 		},
 	}
 
 	for di, d := range data {
-		res, err := getSnapshots(d.e, d.mountDir, d.snapshotDir, d.r)
-		if d.resError && err == nil {
+		res, err := d.node.getSnapshots()
+		if d.err && err == nil {
 			t.Errorf("%d: expected error but succeeded", di)
 			continue
 		}
-		if !d.resError && err != nil {
+		if !d.err && err != nil {
 			t.Errorf("%d: unexpected error: %v", di, err)
 			continue
 		}
-		if len(res) != len(d.resSnapshots) {
-			t.Errorf("%d: unexpected number of results: %d != %d", di, len(res), len(d.resSnapshots))
+		if len(res) != len(d.snapshots) {
+			t.Errorf("%d: unexpected number of results: %d != %d", di, len(res), len(d.snapshots))
 			continue
 		}
 		for i := range res {
-			if res[i] != d.resSnapshots[i] {
+			if res[i] != d.snapshots[i] {
 				t.Errorf("%d: unexpected result: %#v", di, res)
 				continue
 			}
@@ -92,11 +95,11 @@ func TestGetSnapshots(t *testing.T) {
 }
 
 func TestFilterSnapshots(t *testing.T) {
-	data := []struct{
-		volumes []string
-		result []string
+	data := []struct {
+		volumes     []string
+		result      []string
 		snapshotDir string
-		r *regexp.Regexp
+		r           *regexp.Regexp
 	}{
 		{
 			[]string{"snapshot/2019-01-10_03-00", "snapshot/2019-01-11_03-00", "snapshot/2019-01-12_03-00", "snapshot/foobar", "foobar"},
@@ -169,7 +172,7 @@ ID 7577 gen 24965 top level 5 path snapshot/2019-01-30_03-00
 ID 7578 gen 24969 top level 5 path snapshot/2019-01-31_03-00
 `
 
-	data := []struct{
+	data := []struct {
 		btrfsOutput string
 		res         []string
 		err         bool
@@ -225,32 +228,27 @@ ID 7578 gen 24969 top level 5 path snapshot/2019-01-31_03-00
 }
 
 func TestExec(t *testing.T) {
-	data := []struct{
-		e executor
+	data := []struct {
 		cmds [][]string
-		err bool
-		res string
+		err  bool
+		res  string
 	}{
 		{
-			localhost,
 			[][]string{{"/bin/true"}},
 			false,
 			"",
 		},
 		{
-			localhost,
 			[][]string{{"/bin/false"}},
 			true,
 			"",
 		},
 		{
-			localhost,
 			[][]string{{"/foo/bar/fizz/buzz"}},
 			true,
 			"",
 		},
 		{
-			localhost,
 			[][]string{{"echo", "foo"}},
 			false,
 			"foo\n",
@@ -258,7 +256,7 @@ func TestExec(t *testing.T) {
 	}
 
 	for di, d := range data {
-		res, err := d.e.exec(d.cmds)
+		res, err := defaultExecutor.exec(d.cmds)
 		if d.err && err == nil {
 			t.Errorf("%d: expected error but succeeded", di)
 			continue
@@ -274,7 +272,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecPipe(t *testing.T) {
-	out, err := localhost.exec([][]string{{"echo", "foo"}, {"cat"}})
+	out, err := defaultExecutor.exec([][]string{{"echo", "foo"}, {"cat"}})
 	if err != nil {
 		t.Error(err)
 	}
@@ -297,21 +295,26 @@ func (e *trackingExecutor) exec(cmds [][]string) (string, error) {
 }
 
 func TestTransmitSnapshots(t *testing.T) {
-	data := []struct{
-		localSnapshots []string
+	data := []struct {
+		localSnapshots  []string
 		remoteSnapshots []string
-		destination destination
-		mount string
-		dir string
-		invocations []invocation
+		source          node
+		destination     node
+		invocations     []invocation
 	}{
 		{
-			[]string{"1", "2", "3", "4", "5"},
-			[]string{"1", "2", "3"},
-			destination{"foo", 123},
-			"/foo",
-			"bar",
-			[]invocation{
+			localSnapshots:  []string{"1", "2", "3", "4", "5"},
+			remoteSnapshots: []string{"1", "2", "3"},
+			source: node{
+				mountPoint:   "/foo",
+				snapshotPath: "bar",
+			},
+			destination: node{
+				address:    "foo",
+				sshPort:    123,
+				mountPoint: "/foo",
+			},
+			invocations: []invocation{
 				{[][]string{{"btrfs", "send", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
 				{[][]string{{"btrfs", "send", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
 			},
@@ -319,15 +322,16 @@ func TestTransmitSnapshots(t *testing.T) {
 	}
 
 	for di, d := range data {
-		e := &trackingExecutor{}
-		err := transmitSnapshots(e, d.destination, d.mount, d.dir, d.localSnapshots, d.remoteSnapshots)
+		exec := &trackingExecutor{}
+		d.source.executor = exec
+		err := transmitSnapshots(&d.source, &d.destination, d.localSnapshots, d.remoteSnapshots)
 		if err != nil {
 			t.Errorf("%d: unexpected error: %v", di, err)
 			continue
 		}
 
-		if !reflect.DeepEqual(e.invocations, d.invocations) {
-			t.Errorf("%d: unexpected invocations: %#v", di, e.invocations)
+		if !reflect.DeepEqual(exec.invocations, d.invocations) {
+			t.Errorf("%d: unexpected invocations: %#v", di, exec.invocations)
 		}
 	}
 }

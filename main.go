@@ -11,45 +11,65 @@ import (
 	"strings"
 )
 
-func main() {
-	destination := destination{
-		host: "target-host",
-		port: 10022,
-	}
-	mount := "/mnt" // btrfs mount point
-	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
-	snapshotDir := "snapshot" // relative to mount point
+// node represents a Linux system containing a mounted BTRFS
+type node struct {
+	address       string         // address of the system (either IP or hostname)
+	sshPort       int            // SSH port (0 for localhost)
+	mountPoint    string         // BTRFS mount point
+	snapshotPath  string         // directory containing snapshots relative to mount point
+	snapshotRegex *regexp.Regexp // used to match snapshots
+	executor      executor       // used to run commands
+}
 
-	localSnapshots, err := getSnapshots(localhost, mount, snapshotDir, snapshotRegex)
+func main() {
+	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
+	source := node{
+		address:       "localhost",
+		sshPort:       0,
+		mountPoint:    "/mnt",
+		snapshotPath:  "snapshot",
+		snapshotRegex: snapshotRegex,
+		executor:      defaultExecutor,
+	}
+	destination := node{
+		address:       "target-host",
+		sshPort:       10022,
+		mountPoint:    "/mnt",
+		snapshotPath:  "",
+		snapshotRegex: snapshotRegex,
+		executor:      defaultExecutor,
+	}
+
+	sourceSnapshots, err := source.getSnapshots()
 	if err != nil {
 		log.Fatalf("failed to get local snapshots: %v", err)
 	}
-	remoteSnapshots, err := getSnapshots(destination, mount, "", snapshotRegex)
+	destinationSnapshots, err := destination.getSnapshots()
 	if err != nil {
 		log.Fatalf("failed to get remove snapshots: %v", err)
 	}
 
 	fmt.Println("local:")
-	for _, snapshot := range localSnapshots {
+	for _, snapshot := range sourceSnapshots {
 		fmt.Println(snapshot)
 	}
 	fmt.Println("\ndestination:")
-	for _, snapshots := range remoteSnapshots {
+	for _, snapshots := range destinationSnapshots {
 		fmt.Println(snapshots)
 	}
 
-	if err := transmitSnapshots(localhost, destination, mount, snapshotDir, localSnapshots, remoteSnapshots); err != nil {
+	if err := transmitSnapshots(&source, &destination, sourceSnapshots, destinationSnapshots); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func transmitSnapshots(e executor, d destination, mount, dir string, localSnapshots, remoteSnapshots []string) error {
+func transmitSnapshots(source, destination *node, localSnapshots, remoteSnapshots []string) error {
 	mostRecentRemote := remoteSnapshots[len(remoteSnapshots)-1]
 	previousSnapshot := ""
 
 	for _, snapshot := range localSnapshots {
 		if previousSnapshot != "" {
-			err := sendSnapshot(e, d, snapshot, previousSnapshot, mount, dir)
+			err := sendSnapshot(source, destination, snapshot, previousSnapshot)
 			if err != nil {
 				return fmt.Errorf("transmitSnapshots: %v", err)
 			}
@@ -62,16 +82,22 @@ func transmitSnapshots(e executor, d destination, mount, dir string, localSnapsh
 	return nil
 }
 
-func sendSnapshot(e executor, d destination, snapshot, previousSnapshot, mountPoint, snapshotDir string) error {
-	p := path.Join(mountPoint, snapshotDir, previousSnapshot)
-	s := path.Join(mountPoint, snapshotDir, snapshot)
+func sendSnapshot(source, destination *node, snapshot, previousSnapshot string) error {
+	p := path.Join(source.mountPoint, source.snapshotPath, previousSnapshot)
+	s := path.Join(source.mountPoint, source.snapshotPath, snapshot)
 
-	cmd1 := []string{"btrfs", "send", "-p", p, s}
-	cmd2 := sshCmd(d, []string{"btrfs", "receive", mountPoint})
+	sendCmd := []string{"btrfs", "send", "-p", p, s}
+	if source.sshPort != 0 {
+		sendCmd = sshCmd(source, sendCmd)
+	}
+	receiveCmd := []string{"btrfs", "receive", destination.mountPoint}
+	if destination.sshPort != 0 {
+		receiveCmd = sshCmd(destination, receiveCmd)
+	}
 
-	log.Printf("%s | %s", strings.Join(cmd1, " "), strings.Join(cmd2, " "))
+	log.Printf("%s | %s", strings.Join(sendCmd, " "), strings.Join(receiveCmd, " "))
 
-	_, err := e.exec([][]string{cmd1, cmd2})
+	_, err := source.executor.exec([][]string{sendCmd, receiveCmd})
 	if err != nil {
 		return fmt.Errorf("sendSnapshot: %v", err)
 	}
@@ -79,8 +105,13 @@ func sendSnapshot(e executor, d destination, snapshot, previousSnapshot, mountPo
 }
 
 // getSnapshots returns a sorted list of snapshots.
-func getSnapshots(e executor, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
-	out, err := e.exec([][]string{{"btrfs", "subvolume", "list", mountPoint}})
+func (n *node) getSnapshots() ([]string, error) {
+	cmd := []string{"btrfs", "subvolume", "list", n.mountPoint}
+	if n.sshPort != 0 {
+		cmd = sshCmd(n, cmd)
+	}
+
+	out, err := n.executor.exec([][]string{cmd})
 	if err != nil {
 		return nil, err
 	}
@@ -89,9 +120,21 @@ func getSnapshots(e executor, mountPoint string, snapshotDir string, r *regexp.R
 	if err != nil {
 		return nil, err
 	}
-	snapshots := filterSnapshots(subVolumes, snapshotDir, r)
+	snapshots := filterSnapshots(subVolumes, n.snapshotPath, n.snapshotRegex)
 	sort.Strings(snapshots)
 	return snapshots, nil
+}
+
+func (n *node) deleteSnapshots(snapshots []string) error {
+	cmd := []string{"btrfs", "subvolume", "delete"}
+	for _, snapshot := range snapshots {
+		cmd = append(cmd, snapshot)
+	}
+	if n.sshPort != 0 {
+		cmd = sshCmd(n, cmd)
+	}
+	_, err := n.executor.exec([][]string{cmd})
+	return err
 }
 
 // parseSubVolumes extracts the sub-volume names from the "btrfs subvolume list" command.
@@ -128,21 +171,16 @@ func filterSnapshots(subVolumes []string, snapshotDir string, r *regexp.Regexp) 
 	return snapshots
 }
 
-// executor allows to execute commands locally or remotely. It also allows to mock execution for testing.
+// executor allows to execute commands as new processes. Its main purpose is to mock execution for testing.
 type executor interface {
 	exec(cmds [][]string) (string, error)
 }
 
-// destination determines where a command is to be executed.
-type destination struct {
-	host string
-	port int
-}
+type executorImpl struct{}
 
-// localhost is a special destination for running commands locally
-var localhost destination
+var defaultExecutor = executorImpl{}
 
-func (d destination) exec(cmds [][]string) (string, error) {
+func (_ executorImpl) exec(cmds [][]string) (string, error) {
 	var cs []*exec.Cmd
 	var out bytes.Buffer
 	var errs []error
@@ -157,7 +195,7 @@ func (d destination) exec(cmds [][]string) (string, error) {
 			}
 			c.Stdin = pipe
 		}
-		if i == len(cmds) - 1 {
+		if i == len(cmds)-1 {
 			c.Stdout = &out
 		}
 
@@ -170,6 +208,8 @@ func (d destination) exec(cmds [][]string) (string, error) {
 		}
 	}
 
+	// Wait() must be called in reverse because all reads from the stdout pipe must be completed before calling it.
+	// See StdoutPipe(): "[...] it is incorrect to call Wait before all reads from the pipe have completed."
 	for i := len(cs) - 1; i >= 0; i-- {
 		if err := cs[i].Wait(); err != nil {
 			errs = append(errs, err)
@@ -183,6 +223,6 @@ func (d destination) exec(cmds [][]string) (string, error) {
 	return out.String(), nil
 }
 
-func sshCmd(d destination, remoteCmd []string) []string {
-	return []string{"ssh", fmt.Sprintf("-p%d", d.port), d.host, strings.Join(remoteCmd, " ")}
+func sshCmd(n *node, remoteCmd []string) []string {
+	return []string{"ssh", fmt.Sprintf("-p%d", n.sshPort), n.address, strings.Join(remoteCmd, " ")}
 }
