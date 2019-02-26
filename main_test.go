@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -10,25 +9,16 @@ import (
 
 // mockExecutor returns (res, err) if exec is invoked with cmd and returns an error otherwise.
 type mockExecutor struct {
-	cmd []string
+	cmds [][]string
 	res string
 	err error
 }
 
-func (e mockExecutor) exec(cmd []string) (string, error) {
-	if len(e.cmd) != len(cmd) {
-		return "", fmt.Errorf("unexpected cmd: %#v", cmd)
-	}
-	for i := range cmd {
-		if cmd[i] != e.cmd[i] {
-			return "", fmt.Errorf("unexpected cmd: %#v", cmd)
-		}
+func (e mockExecutor) exec(cmds [][]string) (string, error) {
+	if !reflect.DeepEqual(cmds, e.cmds) {
+		return "", fmt.Errorf("unexpected cmd: %#v", cmds)
 	}
 	return e.res, e.err
-}
-
-func (e mockExecutor) execPipe(cmd1, cmd2 []string) (string, error) {
-	return "", errors.New("execPipe not implemented")
 }
 
 func TestGetSnapshots(t *testing.T) {
@@ -42,7 +32,7 @@ func TestGetSnapshots(t *testing.T) {
 	}{
 		{
 			mockExecutor{
-				[]string{"btrfs", "subvolume", "list", "/foo"},
+				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
 				"ID 6988 gen 23968 top level 5 path snapshot/2019-01-11_03-00\nID 6989 gen 23981 top level 5 path snapshot/2019-01-12_03-00\nID 6990 gen 24002 top level 5 path snapshot/2019-01-13_03-00\n",
 				nil,
 			},
@@ -54,7 +44,7 @@ func TestGetSnapshots(t *testing.T) {
 		},
 		{
 			mockExecutor{
-				[]string{"btrfs", "subvolume", "list", "/foo"},
+				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
 				"",
 				fmt.Errorf("mock error"),
 			},
@@ -66,7 +56,7 @@ func TestGetSnapshots(t *testing.T) {
 		},
 		{
 			mockExecutor{
-				[]string{"btrfs", "subvolume", "list", "/foo"},
+				[][]string{{"btrfs", "subvolume", "list", "/foo"}},
 				"foo",
 				nil,
 			},
@@ -237,38 +227,38 @@ ID 7578 gen 24969 top level 5 path snapshot/2019-01-31_03-00
 func TestExec(t *testing.T) {
 	data := []struct{
 		e executor
-		cmd []string
+		cmds [][]string
 		err bool
 		res string
 	}{
 		{
 			localhost,
-			[]string{"/bin/true"},
+			[][]string{{"/bin/true"}},
 			false,
 			"",
 		},
 		{
 			localhost,
-			[]string{"/bin/false"},
+			[][]string{{"/bin/false"}},
 			true,
 			"",
 		},
 		{
 			localhost,
-			[]string{"/foo/bar/fizz/buzz"},
+			[][]string{{"/foo/bar/fizz/buzz"}},
 			true,
 			"",
 		},
 		{
 			localhost,
-			[]string{"echo", "foo"},
+			[][]string{{"echo", "foo"}},
 			false,
 			"foo\n",
 		},
 	}
 
 	for di, d := range data {
-		res, err := d.e.exec(d.cmd)
+		res, err := d.e.exec(d.cmds)
 		if d.err && err == nil {
 			t.Errorf("%d: expected error but succeeded", di)
 			continue
@@ -284,7 +274,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecPipe(t *testing.T) {
-	out, err := localhost.execPipe([]string{"echo", "foo"}, []string{"cat"})
+	out, err := localhost.exec([][]string{{"echo", "foo"}, {"cat"}})
 	if err != nil {
 		t.Error(err)
 	}
@@ -298,16 +288,11 @@ type trackingExecutor struct {
 }
 
 type invocation struct {
-	cmd1 []string
-	cmd2 []string
+	cmds [][]string
 }
 
-func (e *trackingExecutor) exec(cmd []string) (string, error) {
-	return "", errors.New("exec not implemented")
-}
-
-func (e *trackingExecutor) execPipe(cmd1, cmd2 []string) (string, error) {
-	e.invocations = append(e.invocations, invocation{cmd1, cmd2})
+func (e *trackingExecutor) exec(cmds [][]string) (string, error) {
+	e.invocations = append(e.invocations, invocation{cmds})
 	return "", nil
 }
 
@@ -327,8 +312,8 @@ func TestTransmitSnapshots(t *testing.T) {
 			"/foo",
 			"bar",
 			[]invocation{
-				{[]string{"btrfs", "send", "-p", "/foo/bar/3", "/foo/bar/4"}, []string{"ssh", "-p123", "foo", "btrfs receive /foo"}},
-				{[]string{"btrfs", "send", "-p", "/foo/bar/4", "/foo/bar/5"}, []string{"ssh", "-p123", "foo", "btrfs receive /foo"}},
+				{[][]string{{"btrfs", "send", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
+				{[][]string{{"btrfs", "send", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
 			},
 		},
 	}

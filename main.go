@@ -71,16 +71,16 @@ func sendSnapshot(e executor, d destination, snapshot, previousSnapshot, mountPo
 
 	log.Printf("%s | %s", strings.Join(cmd1, " "), strings.Join(cmd2, " "))
 
-	//_, err := e.execPipe(cmd1, cmd2)
-	//if err != nil {
-	//	return fmt.Errorf("sendSnapshot: %v", err)
-	//}
+	_, err := e.exec([][]string{cmd1, cmd2})
+	if err != nil {
+		return fmt.Errorf("sendSnapshot: %v", err)
+	}
 	return nil
 }
 
 // getSnapshots returns a sorted list of snapshots.
 func getSnapshots(e executor, mountPoint string, snapshotDir string, r *regexp.Regexp) ([]string, error) {
-	out, err := e.exec([]string{"btrfs", "subvolume", "list", mountPoint})
+	out, err := e.exec([][]string{{"btrfs", "subvolume", "list", mountPoint}})
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +130,7 @@ func filterSnapshots(subVolumes []string, snapshotDir string, r *regexp.Regexp) 
 
 // executor allows to execute commands locally or remotely. It also allows to mock execution for testing.
 type executor interface {
-	exec(cmd []string) (string, error)
-	execPipe(cmd1, cmd2 []string) (string, error)
+	exec(cmds [][]string) (string, error)
 }
 
 // destination determines where a command is to be executed.
@@ -143,47 +142,45 @@ type destination struct {
 // localhost is a special destination for running commands locally
 var localhost destination
 
-// exec runs the specified cmd at destination d and returns stdout.
-func (d destination) exec(cmd []string) (string, error) {
-	if d != localhost {
-		cmd = sshCmd(d, cmd)
-	}
-	c := exec.Command(cmd[0], cmd[1:]...)
-	var buf bytes.Buffer
-	c.Stdout = &buf
-	if err := c.Run(); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
-}
+func (d destination) exec(cmds [][]string) (string, error) {
+	var cs []*exec.Cmd
+	var out bytes.Buffer
+	var errs []error
 
-func (d destination) execPipe(cmd1, cmd2 []string) (string, error) {
-	c1 := exec.Command(cmd1[0], cmd1[1:]...)
-	c2 := exec.Command(cmd2[0], cmd2[1:]...)
+	for i, cmd := range cmds {
+		c := exec.Command(cmd[0], cmd[1:]...)
 
-	pipe, err := c1.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("execPipe: StdoutPipe: %v", err)
-	}
-	c2.Stdin = pipe
+		if len(cs) > 0 {
+			pipe, err := cs[len(cs)-1].StdoutPipe()
+			if err != nil {
+				return "", fmt.Errorf("execPipe: StdoutPipe: %v", err)
+			}
+			c.Stdin = pipe
+		}
+		if i == len(cmds) - 1 {
+			c.Stdout = &out
+		}
 
-	var buf bytes.Buffer
-	c2.Stdout = &buf
-
-	if err := c1.Start(); err != nil {
-		return "", fmt.Errorf("execPipe: c1.Start: %v", err)
-	}
-	if err := c2.Start(); err != nil {
-		return "", fmt.Errorf("execPipe: c2.Start: %v", err)
-	}
-	if err := c1.Wait(); err != nil {
-		return "", fmt.Errorf("execPipe: c1.Wait: %v", err)
-	}
-	if err := c2.Wait(); err != nil {
-		return "", fmt.Errorf("execPipe: c2.Wait: %v", err)
+		cs = append(cs, c)
 	}
 
-	return buf.String(), nil
+	for _, c := range cs {
+		if err := c.Start(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	for i := len(cs) - 1; i >= 0; i-- {
+		if err := cs[i].Wait(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return "", fmt.Errorf("%+v", errs)
+	}
+
+	return out.String(), nil
 }
 
 func sshCmd(d destination, remoteCmd []string) []string {
