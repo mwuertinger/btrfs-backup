@@ -28,7 +28,11 @@ type node struct {
 func main() {
 	dryRun := flag.Bool("n", false, "dry run")
 	dst := flag.String("dst", "", "destination host:port/path")
+	dstSnapshotPath := flag.String("dst-snapshot-path", "", "directory containing snapshots relative to mount point")
+	verbose := flag.Bool("v", false, "verbose output")
 	flag.Parse()
+
+	defaultExecutor.verbose = *verbose
 
 	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
 	source := node{
@@ -45,6 +49,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	destination.snapshotPath = *dstSnapshotPath
 	destination.snapshotRegex = snapshotRegex
 	destination.executor = defaultExecutor
 
@@ -55,6 +60,19 @@ func main() {
 	destinationSnapshots, err := destination.getSnapshots()
 	if err != nil {
 		log.Fatalf("failed to get remote snapshots: %v", err)
+	}
+
+	if *verbose {
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "Source snapshots:\n")
+		for _, s := range sourceSnapshots {
+			fmt.Fprintf(&buf, "  %s\n", s)
+		}
+		fmt.Fprintf(&buf, "Destination snapshots:\n")
+		for _, s := range destinationSnapshots {
+			fmt.Fprintf(&buf, "  %s\n", s)
+		}
+		log.Println(buf.String())
 	}
 
 	if err := transmitSnapshots(&source, &destination, sourceSnapshots, destinationSnapshots, *dryRun); err != nil {
@@ -206,11 +224,17 @@ type executor interface {
 	exec(cmds [][]string) (string, int, error)
 }
 
-type executorImpl struct{}
+type executorImpl struct{
+	verbose bool
+}
 
 var defaultExecutor = executorImpl{}
 
-func (_ executorImpl) exec(cmds [][]string) (string, int, error) {
+func (e executorImpl) exec(cmds [][]string) (string, int, error) {
+	if e.verbose {
+		log.Printf("exec: %#v", cmds)
+	}
+
 	var cs []*exec.Cmd
 	var out bytes.Buffer
 	var errs []error
