@@ -8,16 +8,16 @@ import (
 )
 
 func TestParseNode(t *testing.T) {
-	data := []struct{
-		in string
+	data := []struct {
+		in  string
 		out node
 		err bool
 	}{
 		{
 			in: "foo.bar:123/fizz/buzz",
 			out: node{
-				address: "foo.bar",
-				sshPort: 123,
+				address:    "foo.bar",
+				sshPort:    123,
 				mountPoint: "/fizz/buzz",
 			},
 			err: false,
@@ -365,8 +365,8 @@ func TestTransmitSnapshots(t *testing.T) {
 }
 
 func TestFormatBytes(t *testing.T) {
-	data := []struct{
-		in int
+	data := []struct {
+		in  int
 		out string
 	}{
 		{0, "0.0 B"},
@@ -374,8 +374,8 @@ func TestFormatBytes(t *testing.T) {
 		{1023, "1023.0 B"},
 		{1024, "1.0 kiB"},
 		{1025, "1.0 kiB"},
-		{1024*1024, "1.0 MiB"},
-		{1024*1024*1024*1024*1024, "1024.0 TiB"},
+		{1024 * 1024, "1.0 MiB"},
+		{1024 * 1024 * 1024 * 1024 * 1024, "1024.0 TiB"},
 	}
 
 	for _, d := range data {

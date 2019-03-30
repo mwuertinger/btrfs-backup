@@ -96,8 +96,8 @@ func parseNode(str string) (node, error) {
 	}
 
 	return node{
-		address: matches[1],
-		sshPort: port,
+		address:    matches[1],
+		sshPort:    port,
 		mountPoint: matches[3],
 	}, nil
 }
@@ -227,8 +227,8 @@ type executor interface {
 	exec(cmds [][]string) (string, int, error)
 }
 
-type executorImpl struct{
-	verbose bool
+type executorImpl struct {
+	verbose     bool
 	logProgress bool
 }
 
@@ -298,8 +298,8 @@ type meteredPipe struct {
 	meter int
 
 	// logging
-	logProgress bool
-	lastLog time.Time
+	logProgress  bool
+	lastLog      time.Time
 	lastLogMeter int
 }
 
@@ -315,7 +315,7 @@ func (m *meteredPipe) Read(p []byte) (int, error) {
 		return n, err
 	}
 	if time.Since(m.lastLog) > time.Second {
-		log.Printf("Transmitted %s", formatBytes(m.meter - m.lastLogMeter))
+		log.Printf("Transmitted %s", formatBytes(m.meter-m.lastLogMeter))
 		m.lastLogMeter = m.meter
 		m.lastLog = time.Now()
 	}
@@ -336,7 +336,7 @@ func formatBytes(b int) string {
 	units := []string{"B", "kiB", "MiB", "GiB", "TiB"}
 	bf := float64(b)
 	base := 0
-	for ; base < len(units) - 1 && bf >= 1024; base++ {
+	for ; base < len(units)-1 && bf >= 1024; base++ {
 		bf /= 1024.0
 	}
 	return fmt.Sprintf("%.1f %s", bf, units[base])
