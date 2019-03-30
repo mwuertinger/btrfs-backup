@@ -363,3 +363,27 @@ func TestTransmitSnapshots(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatBytes(t *testing.T) {
+	data := []struct{
+		in int
+		out string
+	}{
+		{0, "0.0 B"},
+		{10, "10.0 B"},
+		{1023, "1023.0 B"},
+		{1024, "1.0 kiB"},
+		{1025, "1.0 kiB"},
+		{1024*1024, "1.0 MiB"},
+		{1024*1024*1024*1024*1024, "1024.0 TiB"},
+	}
+
+	for _, d := range data {
+		t.Run(fmt.Sprintf("%v", d), func(t *testing.T) {
+			out := formatBytes(d.in)
+			if out != d.out {
+				t.Errorf("%s != %s", out, d.out)
+			}
+		})
+	}
+}

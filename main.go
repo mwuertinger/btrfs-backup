@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // node represents a Linux system containing a mounted BTRFS
@@ -30,9 +31,11 @@ func main() {
 	dst := flag.String("dst", "", "destination host:port/path")
 	dstSnapshotPath := flag.String("dst-snapshot-path", "", "directory containing snapshots relative to mount point")
 	verbose := flag.Bool("v", false, "verbose output")
+	progress := flag.Bool("progress", false, "show transfer progress")
 	flag.Parse()
 
 	defaultExecutor.verbose = *verbose
+	defaultExecutor.logProgress = *progress
 
 	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
 	source := node{
@@ -146,7 +149,7 @@ func sendSnapshot(source, destination *node, snapshot, previousSnapshot string, 
 		return fmt.Errorf("sendSnapshot: %v", err)
 	}
 
-	log.Printf("Sending %s done: %d bytes transmitted", snapshot, transmitted)
+	log.Printf("Sending %s done: %s transmitted", snapshot, formatBytes(transmitted))
 
 	return nil
 }
@@ -226,6 +229,7 @@ type executor interface {
 
 type executorImpl struct{
 	verbose bool
+	logProgress bool
 }
 
 var defaultExecutor = executorImpl{}
@@ -248,7 +252,7 @@ func (e executorImpl) exec(cmds [][]string) (string, int, error) {
 			if err != nil {
 				return "", 0, fmt.Errorf("execPipe: StdoutPipe: %v", err)
 			}
-			meteredPipe := &meteredPipe{r: pipe}
+			meteredPipe := &meteredPipe{r: pipe, logProgress: e.logProgress}
 			pipes = append(pipes, meteredPipe)
 			c.Stdin = meteredPipe
 		}
@@ -292,11 +296,30 @@ func (e executorImpl) exec(cmds [][]string) (string, int, error) {
 type meteredPipe struct {
 	r     io.ReadCloser
 	meter int
+
+	// logging
+	logProgress bool
+	lastLog time.Time
+	lastLogMeter int
 }
 
 func (m *meteredPipe) Read(p []byte) (int, error) {
 	n, err := m.r.Read(p)
 	m.meter += n
+
+	if !m.logProgress {
+		return n, err
+	}
+	if m.lastLog.IsZero() {
+		m.lastLog = time.Now()
+		return n, err
+	}
+	if time.Since(m.lastLog) > time.Second {
+		log.Printf("Transmitted %s", formatBytes(m.meter - m.lastLogMeter))
+		m.lastLogMeter = m.meter
+		m.lastLog = time.Now()
+	}
+
 	return n, err
 }
 
@@ -307,4 +330,14 @@ func (m *meteredPipe) Close() error {
 func sshCmd(n *node, remoteCmd []string) []string {
 	cmd := []string{"ssh", fmt.Sprintf("-p%d", n.sshPort), n.address, "--"}
 	return append(cmd, remoteCmd...)
+}
+
+func formatBytes(b int) string {
+	units := []string{"B", "kiB", "MiB", "GiB", "TiB"}
+	bf := float64(b)
+	base := 0
+	for ; base < len(units) - 1 && bf >= 1024; base++ {
+		bf /= 1024.0
+	}
+	return fmt.Sprintf("%.1f %s", bf, units[base])
 }
