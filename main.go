@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +26,10 @@ type node struct {
 }
 
 func main() {
+	dryRun := flag.Bool("n", false, "dry run")
+	dst := flag.String("dst", "", "destination host:port/path")
+	flag.Parse()
+
 	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
 	source := node{
 		address:       "localhost",
@@ -31,14 +39,14 @@ func main() {
 		snapshotRegex: snapshotRegex,
 		executor:      defaultExecutor,
 	}
-	destination := node{
-		address:       "target-host",
-		sshPort:       10022,
-		mountPoint:    "/mnt",
-		snapshotPath:  "",
-		snapshotRegex: snapshotRegex,
-		executor:      defaultExecutor,
+
+	destination, err := parseNode(*dst)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	destination.snapshotRegex = snapshotRegex
+	destination.executor = defaultExecutor
 
 	sourceSnapshots, err := source.getSnapshots()
 	if err != nil {
@@ -46,31 +54,45 @@ func main() {
 	}
 	destinationSnapshots, err := destination.getSnapshots()
 	if err != nil {
-		log.Fatalf("failed to get remove snapshots: %v", err)
+		log.Fatalf("failed to get remote snapshots: %v", err)
 	}
 
-	fmt.Println("local:")
-	for _, snapshot := range sourceSnapshots {
-		fmt.Println(snapshot)
-	}
-	fmt.Println("\ndestination:")
-	for _, snapshots := range destinationSnapshots {
-		fmt.Println(snapshots)
-	}
-
-	if err := transmitSnapshots(&source, &destination, sourceSnapshots, destinationSnapshots); err != nil {
+	if err := transmitSnapshots(&source, &destination, sourceSnapshots, destinationSnapshots, *dryRun); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func transmitSnapshots(source, destination *node, localSnapshots, remoteSnapshots []string) error {
+func parseNode(str string) (node, error) {
+	destinationRegexp := regexp.MustCompile(`^([a-z0-9\-\.]+):([0-9]+)(\/[a-zA-Z0-9\-\.\/]+)$`)
+	matches := destinationRegexp.FindStringSubmatch(str)
+	if len(matches) != 4 {
+		return node{}, fmt.Errorf("invalid node: %s", str)
+	}
+
+	port, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return node{}, fmt.Errorf("invalid node: %s", str)
+	}
+
+	return node{
+		address: matches[1],
+		sshPort: port,
+		mountPoint: matches[3],
+	}, nil
+}
+
+func transmitSnapshots(source, destination *node, localSnapshots, remoteSnapshots []string, dryRun bool) error {
 	mostRecentRemote := remoteSnapshots[len(remoteSnapshots)-1]
 	previousSnapshot := ""
 
 	for _, snapshot := range localSnapshots {
 		if previousSnapshot != "" {
-			err := sendSnapshot(source, destination, snapshot, previousSnapshot)
+			err := sendSnapshot(source, destination, snapshot, previousSnapshot, dryRun)
 			if err != nil {
+				log.Printf("Sending %s failed. Attempting to delete snapshot at destination...", snapshot)
+				if err := destination.deleteSnapshots([]string{snapshot}); err != nil {
+					log.Printf("Deleting snasphot failed: %v", err)
+				}
 				return fmt.Errorf("transmitSnapshots: %v", err)
 			}
 			previousSnapshot = snapshot
@@ -82,11 +104,11 @@ func transmitSnapshots(source, destination *node, localSnapshots, remoteSnapshot
 	return nil
 }
 
-func sendSnapshot(source, destination *node, snapshot, previousSnapshot string) error {
+func sendSnapshot(source, destination *node, snapshot, previousSnapshot string, dryRun bool) error {
 	p := path.Join(source.mountPoint, source.snapshotPath, previousSnapshot)
 	s := path.Join(source.mountPoint, source.snapshotPath, snapshot)
 
-	sendCmd := []string{"btrfs", "send", "-p", p, s}
+	sendCmd := []string{"btrfs", "send", "--quiet", "-p", p, s}
 	if source.sshPort != 0 {
 		sendCmd = sshCmd(source, sendCmd)
 	}
@@ -95,12 +117,19 @@ func sendSnapshot(source, destination *node, snapshot, previousSnapshot string) 
 		receiveCmd = sshCmd(destination, receiveCmd)
 	}
 
-	log.Printf("%s | %s", strings.Join(sendCmd, " "), strings.Join(receiveCmd, " "))
+	log.Printf("Sending %s", snapshot)
 
-	_, err := source.executor.exec([][]string{sendCmd, receiveCmd})
+	if dryRun {
+		return nil
+	}
+
+	_, transmitted, err := source.executor.exec([][]string{sendCmd, receiveCmd})
 	if err != nil {
 		return fmt.Errorf("sendSnapshot: %v", err)
 	}
+
+	log.Printf("Sending %s done: %d bytes transmitted", snapshot, transmitted)
+
 	return nil
 }
 
@@ -111,7 +140,7 @@ func (n *node) getSnapshots() ([]string, error) {
 		cmd = sshCmd(n, cmd)
 	}
 
-	out, err := n.executor.exec([][]string{cmd})
+	out, _, err := n.executor.exec([][]string{cmd})
 	if err != nil {
 		return nil, err
 	}
@@ -126,14 +155,15 @@ func (n *node) getSnapshots() ([]string, error) {
 }
 
 func (n *node) deleteSnapshots(snapshots []string) error {
-	cmd := []string{"btrfs", "subvolume", "delete"}
-	for _, snapshot := range snapshots {
-		cmd = append(cmd, snapshot)
+	if len(snapshots) == 0 {
+		return nil
 	}
+	cmd := []string{"btrfs", "subvolume", "delete"}
+	cmd = append(cmd, snapshots...)
 	if n.sshPort != 0 {
 		cmd = sshCmd(n, cmd)
 	}
-	_, err := n.executor.exec([][]string{cmd})
+	_, _, err := n.executor.exec([][]string{cmd})
 	return err
 }
 
@@ -173,17 +203,18 @@ func filterSnapshots(subVolumes []string, snapshotDir string, r *regexp.Regexp) 
 
 // executor allows to execute commands as new processes. Its main purpose is to mock execution for testing.
 type executor interface {
-	exec(cmds [][]string) (string, error)
+	exec(cmds [][]string) (string, int, error)
 }
 
 type executorImpl struct{}
 
 var defaultExecutor = executorImpl{}
 
-func (_ executorImpl) exec(cmds [][]string) (string, error) {
+func (_ executorImpl) exec(cmds [][]string) (string, int, error) {
 	var cs []*exec.Cmd
 	var out bytes.Buffer
 	var errs []error
+	var pipes []*meteredPipe
 
 	for i, cmd := range cmds {
 		c := exec.Command(cmd[0], cmd[1:]...)
@@ -191,13 +222,16 @@ func (_ executorImpl) exec(cmds [][]string) (string, error) {
 		if len(cs) > 0 {
 			pipe, err := cs[len(cs)-1].StdoutPipe()
 			if err != nil {
-				return "", fmt.Errorf("execPipe: StdoutPipe: %v", err)
+				return "", 0, fmt.Errorf("execPipe: StdoutPipe: %v", err)
 			}
-			c.Stdin = pipe
+			meteredPipe := &meteredPipe{r: pipe}
+			pipes = append(pipes, meteredPipe)
+			c.Stdin = meteredPipe
 		}
 		if i == len(cmds)-1 {
 			c.Stdout = &out
 		}
+		c.Stderr = os.Stderr
 
 		cs = append(cs, c)
 	}
@@ -216,13 +250,37 @@ func (_ executorImpl) exec(cmds [][]string) (string, error) {
 		}
 	}
 
-	if len(errs) > 0 {
-		return "", fmt.Errorf("%+v", errs)
+	// take the maximum of data transmitted through the pipes
+	transmitted := 0
+	for _, p := range pipes {
+		if p.meter > transmitted {
+			transmitted = p.meter
+		}
 	}
 
-	return out.String(), nil
+	if len(errs) > 0 {
+		return "", transmitted, fmt.Errorf("%+v", errs)
+	}
+
+	return out.String(), transmitted, nil
+}
+
+type meteredPipe struct {
+	r     io.ReadCloser
+	meter int
+}
+
+func (m *meteredPipe) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	m.meter += n
+	return n, err
+}
+
+func (m *meteredPipe) Close() error {
+	return m.r.Close()
 }
 
 func sshCmd(n *node, remoteCmd []string) []string {
-	return []string{"ssh", fmt.Sprintf("-p%d", n.sshPort), n.address, strings.Join(remoteCmd, " ")}
+	cmd := []string{"ssh", fmt.Sprintf("-p%d", n.sshPort), n.address, "--"}
+	return append(cmd, remoteCmd...)
 }

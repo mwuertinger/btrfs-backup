@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestParseNode(t *testing.T) {
+	data := []struct{
+		in string
+		out node
+		err bool
+	}{
+		{
+			in: "foo.bar:123/fizz/buzz",
+			out: node{
+				address: "foo.bar",
+				sshPort: 123,
+				mountPoint: "/fizz/buzz",
+			},
+			err: false,
+		},
+	}
+
+	for _, d := range data {
+		out, err := parseNode(d.in)
+		if d.err && err == nil {
+			t.Errorf("expected error but succeeded")
+		}
+		if !reflect.DeepEqual(out, d.out) {
+			t.Errorf("unexpected output: %v", out)
+		}
+	}
+}
+
 // mockExecutor returns (res, err) if exec is invoked with cmd and returns an error otherwise.
 type mockExecutor struct {
 	cmds [][]string
@@ -14,11 +42,11 @@ type mockExecutor struct {
 	err  error
 }
 
-func (e mockExecutor) exec(cmds [][]string) (string, error) {
+func (e mockExecutor) exec(cmds [][]string) (string, int, error) {
 	if !reflect.DeepEqual(cmds, e.cmds) {
-		return "", fmt.Errorf("unexpected cmd: %#v", cmds)
+		return "", 0, fmt.Errorf("unexpected cmd: %#v", cmds)
 	}
-	return e.res, e.err
+	return e.res, 0, e.err
 }
 
 func TestGetSnapshots(t *testing.T) {
@@ -256,7 +284,7 @@ func TestExec(t *testing.T) {
 	}
 
 	for di, d := range data {
-		res, err := defaultExecutor.exec(d.cmds)
+		res, _, err := defaultExecutor.exec(d.cmds)
 		if d.err && err == nil {
 			t.Errorf("%d: expected error but succeeded", di)
 			continue
@@ -272,7 +300,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecPipe(t *testing.T) {
-	out, err := defaultExecutor.exec([][]string{{"echo", "foo"}, {"cat"}})
+	out, _, err := defaultExecutor.exec([][]string{{"echo", "foo"}, {"cat"}})
 	if err != nil {
 		t.Error(err)
 	}
@@ -289,9 +317,9 @@ type invocation struct {
 	cmds [][]string
 }
 
-func (e *trackingExecutor) exec(cmds [][]string) (string, error) {
+func (e *trackingExecutor) exec(cmds [][]string) (string, int, error) {
 	e.invocations = append(e.invocations, invocation{cmds})
-	return "", nil
+	return "", 0, nil
 }
 
 func TestTransmitSnapshots(t *testing.T) {
@@ -315,8 +343,8 @@ func TestTransmitSnapshots(t *testing.T) {
 				mountPoint: "/foo",
 			},
 			invocations: []invocation{
-				{[][]string{{"btrfs", "send", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
-				{[][]string{{"btrfs", "send", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-p123", "foo", "btrfs receive /foo"}}},
+				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
+				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
 			},
 		},
 	}
@@ -324,7 +352,7 @@ func TestTransmitSnapshots(t *testing.T) {
 	for di, d := range data {
 		exec := &trackingExecutor{}
 		d.source.executor = exec
-		err := transmitSnapshots(&d.source, &d.destination, d.localSnapshots, d.remoteSnapshots)
+		err := transmitSnapshots(&d.source, &d.destination, d.localSnapshots, d.remoteSnapshots, false)
 		if err != nil {
 			t.Errorf("%d: unexpected error: %v", di, err)
 			continue
