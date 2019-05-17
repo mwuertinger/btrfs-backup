@@ -65,6 +65,10 @@ func main() {
 		log.Fatalf("failed to get remote snapshots: %v", err)
 	}
 
+	if len(destinationSnapshots) == 0 {
+		log.Fatalf("No destination snapshots yet. Please perform an initial backup first.")
+	}
+
 	if *verbose {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "Source snapshots:\n")
