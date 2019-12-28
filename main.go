@@ -28,8 +28,9 @@ type node struct {
 
 func main() {
 	dryRun := flag.Bool("n", false, "dry run")
-	dst := flag.String("dst", "", "destination host:port/path")
-	dstSnapshotPath := flag.String("dst-snapshot-path", "", "directory containing snapshots relative to mount point")
+	src := flag.String("src", "", "source host:port/fs-path//snapshot-dir")
+	dst := flag.String("dst", "", "destination host:port/fs-path//snapshot-dir")
+	snapshotRegexArg := flag.String("snapshot-regex", `^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`, "only snapshots matching this regex will be taken into account")
 	verbose := flag.Bool("v", false, "verbose output")
 	progress := flag.Bool("progress", false, "show transfer progress")
 	flag.Parse()
@@ -37,24 +38,28 @@ func main() {
 	defaultExecutor.verbose = *verbose
 	defaultExecutor.logProgress = *progress
 
-	snapshotRegex := regexp.MustCompile(`^\d\d\d\d-\d\d-\d\d_\d\d-\d\d$`)
-	source := node{
-		address:       "localhost",
-		sshPort:       0,
-		mountPoint:    "/mnt",
-		snapshotPath:  "snapshot",
-		snapshotRegex: snapshotRegex,
-		executor:      defaultExecutor,
+	snapshotRegex, err := regexp.Compile(*snapshotRegexArg)
+	if err != nil {
+		log.Fatalf("snapshot-regex: %v", err)
 	}
-
+	source, err := parseNode(*src)
+	if err != nil {
+		log.Fatalf("source: %v", err)
+	}
 	destination, err := parseNode(*dst)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("destination: %v", err)
 	}
 
-	destination.snapshotPath = *dstSnapshotPath
+	source.snapshotRegex = snapshotRegex
+	source.executor = defaultExecutor
 	destination.snapshotRegex = snapshotRegex
 	destination.executor = defaultExecutor
+
+	if *verbose {
+		log.Printf("source = %+v", source)
+		log.Printf("destination = %+v", destination)
+	}
 
 	sourceSnapshots, err := source.getSnapshots()
 	if err != nil {
@@ -99,10 +104,22 @@ func parseNode(str string) (node, error) {
 		return node{}, fmt.Errorf("invalid node: %s", str)
 	}
 
+	path := matches[3]
+	pathTokens := strings.Split(path, "//")
+	if len(pathTokens) > 2 {
+		return node{}, fmt.Errorf("invalid node: path must not contain more than once //")
+	}
+	mountPoint := pathTokens[0]
+	snapshotPath := ""
+	if len(pathTokens) == 2 {
+		snapshotPath = pathTokens[1]
+	}
+
 	return node{
-		address:    matches[1],
-		sshPort:    port,
-		mountPoint: matches[3],
+		address:      matches[1],
+		sshPort:      port,
+		mountPoint:   mountPoint,
+		snapshotPath: snapshotPath,
 	}, nil
 }
 

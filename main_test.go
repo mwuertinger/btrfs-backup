@@ -22,6 +22,21 @@ func TestParseNode(t *testing.T) {
 			},
 			err: false,
 		},
+		{
+			in: "foo.bar:123/fizz//buzz",
+			out: node{
+				address:      "foo.bar",
+				sshPort:      123,
+				mountPoint:   "/fizz",
+				snapshotPath: "buzz",
+			},
+			err: false,
+		},
+		{
+			in:  "foo.bar:123/fizz//buzz//foo",
+			out: node{},
+			err: true,
+		},
 	}
 
 	for _, d := range data {
