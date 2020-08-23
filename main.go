@@ -332,7 +332,7 @@ func (m *meteredPipe) Close() error {
 }
 
 func sshCmd(n *node, remoteCmd []string) []string {
-	cmd := []string{"ssh", fmt.Sprintf("-p%d", n.sshPort), n.address, "--"}
+	cmd := []string{"ssh", "-C", fmt.Sprintf("-p%d", n.sshPort), n.address, "--"}
 	return append(cmd, remoteCmd...)
 }
 
