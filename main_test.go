@@ -343,8 +343,8 @@ func TestTransmitSnapshots(t *testing.T) {
 				mountPoint: "/foo",
 			},
 			invocations: []invocation{
-				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
-				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
+				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/3", "/foo/bar/4"}, {"ssh", "-C", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
+				{[][]string{{"btrfs", "send", "--quiet", "-p", "/foo/bar/4", "/foo/bar/5"}, {"ssh", "-C", "-p123", "foo", "--", "btrfs", "receive", "/foo"}}},
 			},
 		},
 	}
