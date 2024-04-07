@@ -1,3 +1,3 @@
 module github.com/mwuertinger/btrfs-backup
 
-go 1.15
+go 1.20
