@@ -88,7 +88,7 @@ func main() {
 }
 
 func parseNode(str string) (node, error) {
-	destinationRegexp := regexp.MustCompile(`^([a-z0-9\-\.]+):([0-9]+)(\/[a-zA-Z0-9\-\.\/]+)$`)
+	destinationRegexp := regexp.MustCompile(`^([a-z0-9\-\.]+):([0-9]+)(\/[a-zA-Z0-9\-_\.\/]+)$`)
 	matches := destinationRegexp.FindStringSubmatch(str)
 	if len(matches) != 4 {
 		return node{}, fmt.Errorf("invalid node: %s", str)
